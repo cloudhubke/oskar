@@ -1,4 +1,5 @@
-#How to Build And Package
+# How to Build And Package
+
 These instructions are form building dmg(mac) and .deb (debian) packages in a mac computer.
 
 They have been tested to work on MacOs Big Sur (11.0.1);
