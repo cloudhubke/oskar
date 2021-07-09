@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "algorithm": "cpp",
+        "string": "cpp",
+        "filesystem": "cpp",
+        "iosfwd": "cpp",
+        "*.ipp": "cpp",
+        "__tree": "cpp",
+        "istream": "cpp",
+        "locale": "cpp",
+        "*.inc": "cpp",
+        "typeindex": "cpp",
+        "typeinfo": "cpp"
+    }
+}
