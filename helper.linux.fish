@@ -1715,5 +1715,4 @@ end
 ## set PARALLELISM in a sensible way
 ## #############################################################################
 
-## Usee this if on linux: parallelism (nproc)
-parallelism (sysctl -n hw.logicalcpu)
+parallelism (nproc)
