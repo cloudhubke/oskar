@@ -459,6 +459,7 @@ function makeRelease
 end
 
 function makeCommunityRelease
+  
   if test (count $argv) -lt 2
     findArangoDBVersion ; or return 1
   else
