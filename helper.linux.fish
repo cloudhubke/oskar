@@ -642,19 +642,19 @@ function buildDebianPackage
   and cp -a $EDITIONFOLDER $TARGET
   and for f in arangodb3.init arangodb3.service compat config templates preinst prerm postinst postrm rules
     cp $SOURCE/common/$f $TARGET/$f
-    /usr/local/opt/gnu-sed/libexec/gnubin/sed -e "s/@EDITION@/$EDITION/g" -i $TARGET/$f
+    sed -e "s/@EDITION@/$EDITION/g" -i $TARGET/$f
     if test $PACKAGE_STRIP = All
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_ALL@//"                 -i $TARGET/$f
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_EXCEPT_ARANGOD@/echo /" -i $TARGET/$f
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_NONE@/echo /"           -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_ALL@//"                 -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_EXCEPT_ARANGOD@/echo /" -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_NONE@/echo /"           -i $TARGET/$f
     else if test $PACKAGE_STRIP = ExceptArangod
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_ALL@/echo /"            -i $TARGET/$f
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_EXCEPT_ARANGOD@//"      -i $TARGET/$f
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_NONE@/echo /"           -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_ALL@/echo /"            -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_EXCEPT_ARANGOD@//"      -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_NONE@/echo /"           -i $TARGET/$f
     else
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_ALL@/echo /"            -i $TARGET/$f
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_EXCEPT_ARANGOD@/echo /" -i $TARGET/$f
-      /usr/local/opt/gnu-sed/libexec/gnubin/sed -i -e "s/@DEBIAN_STRIP_NONE@//"                -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_ALL@/echo /"            -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_EXCEPT_ARANGOD@/echo /" -i $TARGET/$f
+      sed -i -e "s/@DEBIAN_STRIP_NONE@//"                -i $TARGET/$f
     end
   end
   and echo -n "$EDITION " > $ch
