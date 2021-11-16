@@ -66,9 +66,11 @@ the above commands will build the application and place the build files in work/
 
 After that. It will run the `buildPackage` and generate .dmg files.
 
-## Building .DEB
+## Building .DEB (Use a debian dist like Ubuntu).
 
-After generating the executables in above, now you can proceed to generate the debian files.
+### The instructions below have been tested on ubuntu desktop 20.04 LTS
+
+Log in to ubuntu and clone the oskar project as well as the work/ArangoDb project inside the oskar directory.
 
 ```
 fish
@@ -79,31 +81,5 @@ community
 maintainerOff
 findArangoDBVersion
 
-buildDebianPackage
-
-```
-
-if You get errors like `sed: -i: No such file or directory`
-
-You may need to install another version of sed other than the one installed in macos.
-
-```
-brew install gnu-sed
-```
-
-then repeat
-
-```
-PATH="/usr/local/opt/gnu-sed/libexec/gnubin:$PATH"
-
-fish
-source config/environment.fish
-source helper.fish
-source helper.linux.fish
-community
-maintainerOff
-findArangoDBVersion
-
-buildDebianPackage
-
+buildCommunityPackage
 ```
