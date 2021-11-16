@@ -60,30 +60,223 @@ INSERTASYNC
 Future<OperationResult> transaction::Methods::insertAsync(std::string const& cname,
                                                           VPackSlice value,
                                                           OperationOptions const& options) {
-  TRI_ASSERT(_state->status() == transaction::Status::RUNNING);
+  this->beforeSave(cname, value, options);
+```
 
+UPDATEASYNC
 
-  // std::string refError;
+Added the following code
 
-  if (!value.isObject() && !value.isArray()) {
-    // must provide a document object or an array of documents
-    events::CreateDocument(vocbase().name(), cname, value, options,
-                           TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID);
-    THROW_ARANGO_EXCEPTION(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID);
+```
+
+  this->beforeSave(cname, value, options);
+
+```
+
+REMOVEASYNC
+
+Added the following:
+
+```
+  this->beforeRemove(cname, value, options);
+
+  // END OF ADDITIONS
+
+```
+
+TRUNCATEASYNC
+
+Added the following:
+
+```
+
+  this->beforeTruncate(collectionName, options);
+
+  // END OF ADDITIONS
+
+```
+
+```
+
+// Added by Gaitho
+// Validate collections before inset and update
+/// @brief return the collection
+void transaction::Methods::beforeSave(std::string const& cname, VPackSlice value,
+                                      OperationOptions const& options) {
+  int collType = getCollectionType(cname);
+
+  std::string qry =
+      "LET colschema = SCHEMA_GET('" + cname + "') RETURN colschema";
+  auto binds = std::make_shared<VPackBuilder>();
+  binds->openObject();
+  binds->close();
+
+  arangodb::aql::Query query(_transactionContext, aql::QueryString(qry), binds);
+  aql::QueryResult queryResult = query.executeSync();
+
+  if (queryResult.result.fail()) {
+    THROW_ARANGO_EXCEPTION(queryResult.result);
   }
+  VPackBuilder linkCollections;
+  linkCollections.openObject();
 
-  // Method to validate edges before insert
+  if (queryResult.data->slice().length() == 1) {
+    for (auto it : VPackArrayIterator(queryResult.data->slice())) {
+      if (it.isObject()) {
+        VPackSlice schemaItem = it.value();
+        VPackSlice propertyvalue(
+            schemaItem.get(std::vector<std::string>({"rule", "properties"})));
+
+        if (propertyvalue.isObject()) {
+          for (auto prop : VPackObjectIterator(propertyvalue)) {
+            std::string fieldName = prop.key.copyString();
+            VPackSlice modelProp = prop.value;
+            VPackSlice links = modelProp.get("linkCollections");
+
+            if (links.isArray()) {
+              std::string linkStr = "";
+              for (auto link : VPackArrayIterator(links)) {
+                if (link.isString()) {
+                  std::string cName = link.copyString();
+                  linkStr = linkStr + cName + "/";
+                }
+              }
+              linkCollections.add(fieldName, VPackValue(linkStr));
+            }
+          }
+        }
+      }
+    }
+  }
+  linkCollections.close();
+
+  auto getLinkCollections = [&]() { return linkCollections.slice(); };
+
+  /*
+   Method to check for document links
+  */
+  auto checkVertexField = [&](std::string const& fieldName, const auto docValue) {
+    VPackSlice _idValue = docValue.get("_id");
+
+    auto throwError = [&]() {
+      THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                                     +" invalid _id value in : " + fieldName);
+    };
+
+    VPackSlice fColls = getLinkCollections();
+    std::string collStr = "";
+
+    if (fColls.isObject()) {
+      VPackSlice colls = fColls.get(fieldName);
+      if (colls.isString()) {
+        collStr = colls.copyString();
+      }
+      // for (auto const& prop : VPackObjectIterator(fColls)) {
+      //   if (prop.key.isString() && prop.value.isString()) {
+      //     std::string key = prop.key.copyString();
+      //     std::string val = prop.value.copyString();
+      //     std::cout << key << " : " << val << std::endl;
+      //     if (key == fieldName) {
+      //     }
+      //   }
+      // }
+    }
+
+    if (_idValue.isNone() && docValue.length() >= 1 && collStr.size() >= 1) {
+      THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                                     +"_id value not found in colection " +
+                                         cname + ". Expected " + fieldName +
+                                         " to have a key `_id`.");
+    }
+
+    if (!_idValue.isNone()) {
+      if (!_idValue.isString()) {
+        throwError();
+      }
+      std::string link_id = _idValue.copyString();
+
+      if (link_id.find("/") == std::string::npos) {
+        throwError();
+      }
+
+      std::string docCollectionName = link_id.substr(0, link_id.find("/"));
+      std::string doc_key = link_id.substr(link_id.find("/") + 1, link_id.size());
+
+      if (docCollectionName.size() == 0 || doc_key.size() == 0) {
+        throwError();
+      }
+
+      if (collStr.size() == 0) {
+        THROW_ARANGO_EXCEPTION_MESSAGE(
+            TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+            "invalid schema for: " + cname +
+                ". Could not find linkCollections definition for " +
+                docCollectionName + " in property " + fieldName);
+      }
+
+      if (collStr.find(docCollectionName + "/") == std::string::npos) {
+        THROW_ARANGO_EXCEPTION_MESSAGE(
+            TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+            "invalid schema for: " + cname +
+                ". Shema found but without a valid linkCollection for `" +
+                docCollectionName + "` in property " + fieldName);
+      } else {
+        VPackBuilder checkDocument;
+        {
+          VPackObjectBuilder guard(&checkDocument);
+          checkDocument.add(StaticStrings::KeyString, VPackValue(doc_key));
+        }
+
+        OperationOptions docOptions;
+        OperationResult checkDoc =
+            this->document(docCollectionName, checkDocument.slice(), docOptions);
+
+        if (!checkDoc.ok()) {
+          THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                                         link_id +
+                                             " is not a valid document in " + fieldName +
+                                             " property of collection " + cname);
+        }
+      }
+    }
+  };
+
+  /*
+   Method to validate edges before insert. It checks that both referenced documents in _from and _to actualy exists
+  */
   auto checkValue = [&](const auto docValue) {
     std::string _from;
     std::string _to;
 
     for (auto it : VPackObjectIterator(docValue)) {
-      if (it.key.copyString() == "_from" || it.key.copyString() == "_to") {
+      std::string fieldName = it.key.copyString();
+
+      if (fieldName == "_from" || fieldName == "_to") {
+        std::string collref = fieldName.substr(0, fieldName.size() - 3);
+
+        auto throwError = [&]() {
+          THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                                         +" invalid value in : " + fieldName);
+        };
+
+        if (!it.value.isString()) {
+          throwError();
+        }
+
         std::string doc_id = it.value.copyString();
+
+        if (doc_id.find("/") == std::string::npos) {
+          throwError();
+        }
+
         std::string docCollectionName = doc_id.substr(0, doc_id.find("/"));
         std::string doc_key = doc_id.substr(doc_id.find("/") + 1, doc_id.size());
 
-        if (it.key.copyString() == "_from") {
+        if (docCollectionName.size() == 0 || doc_key.size() == 0) {
+          throwError();
+        }
+
+        if (fieldName == "_from") {
           _from = doc_id;
         } else {
           _to = doc_id;
@@ -94,7 +287,6 @@ Future<OperationResult> transaction::Methods::insertAsync(std::string const& cna
           VPackObjectBuilder guard(&checkDocument);
           checkDocument.add(StaticStrings::KeyString, VPackValue(doc_key));
         }
-        // bool hasRefError = false;
 
         OperationOptions docOptions;
         OperationResult checkDoc =
@@ -115,138 +307,140 @@ Future<OperationResult> transaction::Methods::insertAsync(std::string const& cna
     }
   };
 
-  if (value.isObject()) {
-    checkValue(value);
+  if (value.isObject() && !options.isRestore) {
+    for (auto it : VPackObjectIterator(value)) {
+      std::string fieldName = it.key.copyString();
+
+      VPackSlice fieldValue = it.value;
+
+      if (fieldValue.isObject()) {
+        checkVertexField(fieldName, fieldValue);
+      }
+
+      if (fieldValue.isArray()) {
+        for (auto it2 : VPackArrayIterator(fieldValue)) {
+          if (it2.isObject()) {
+            checkVertexField(fieldName, it2.value());
+          }
+        }
+      }
+    }
+
+    if (collType == 3) {
+      checkValue(value);
+    }
   }
 
-  if (value.isArray()) {
+  if (value.isArray() && !options.isRestore) {
     for (auto it : VPackArrayIterator(value)) {
       if (it.isObject()) {
-        checkValue(it.value());
+        for (auto it : VPackObjectIterator(it.value())) {
+          std::string fieldName = it.key.copyString();
+
+          VPackSlice fieldValue = it.value;
+
+          if (fieldValue.isObject()) {
+            checkVertexField(fieldName, fieldValue);
+          }
+
+          if (fieldValue.isArray()) {
+            for (auto it2 : VPackArrayIterator(fieldValue)) {
+              if (it2.isObject()) {
+                checkVertexField(fieldName, it2.value());
+              }
+            }
+          }
+        }
+
+        if (collType == 3) {
+          checkValue(it.value());
+        }
       }
     }
   }
-
-  if (value.isArray() && value.length() == 0) {
-    events::CreateDocument(vocbase().name(), cname, value, options, TRI_ERROR_NO_ERROR);
-    return emptyResult(options);
-  }
-
-  auto f = Future<OperationResult>::makeEmpty();
-  if (_state->isCoordinator()) {
-    f = insertCoordinator(cname, value, options);
-  } else {
-    OperationOptions optionsCopy = options;
-    f = insertLocal(cname, value, optionsCopy);
-  }
-
-  return addTracking(std::move(f), [=](OperationResult&& opRes) {
-    events::CreateDocument(vocbase().name(), cname,
-                           (opRes.ok() && opRes.options.returnNew) ? opRes.slice() : value,
-                           opRes.options, opRes.errorNumber());
-    return std::move(opRes);
-  });
 }
 
-```
+void transaction::Methods::beforeRemove(std::string const& cname, VPackSlice value,
+                                        OperationOptions const& options) {
+  auto getSchemaReferences = [&](std::string collName, std::string _key) {
+    // QUERY the schema definition on this collection
+    std::string qry =
+        "LET colschema = SCHEMA_GET('" + collName + "') RETURN colschema";
+    auto binds = std::make_shared<VPackBuilder>();
+    binds->openObject();
+    binds->close();
 
-UPDATEASYNC
+    arangodb::aql::Query query(_transactionContext, aql::QueryString(qry), binds);
+    aql::QueryResult queryResult = query.executeSync();
 
-Added the following code
-
-```
-/*
-  Method to validate edges before insert. It checks that both referenced documents in _from and _to actualy exists
- */
-  auto checkValue = [&](const auto docValue) {
-    std::string _from;
-    std::string _to;
-
-    for (auto it : VPackObjectIterator(docValue)) {
-      if (it.key.copyString() == "_from" || it.key.copyString() == "_to") {
-        std::string doc_id = it.value.copyString();
-        std::string docCollectionName = doc_id.substr(0, doc_id.find("/"));
-        std::string doc_key = doc_id.substr(doc_id.find("/") + 1, doc_id.size());
-
-        if (it.key.copyString() == "_from") {
-          _from = doc_id;
-        } else {
-          _to = doc_id;
-        }
-
-        VPackBuilder checkDocument;
-        {
-          VPackObjectBuilder guard(&checkDocument);
-          checkDocument.add(StaticStrings::KeyString, VPackValue(doc_key));
-        }
-        // bool hasRefError = false;
-
-        OperationOptions docOptions;
-        OperationResult checkDoc =
-            this->document(docCollectionName, checkDocument.slice(), docOptions);
-
-        if (!checkDoc.ok()) {
-          THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
-                                         doc_id +
-                                             " is not a valid document in : " + cname);
-        }
-      }
+    if (queryResult.result.fail()) {
+      THROW_ARANGO_EXCEPTION(queryResult.result);
     }
 
-    if (_to.size() > 0) {
-      if (_from.size() == 0) {
-        THROW_ARANGO_EXCEPTION_MESSAGE(
-            TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
-            " `_from` value is not supplied in edge " + cname);
-      }
-      if (_from == _to) {
-        THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
-                                       _from + " reference to same document " +
-                                           _to + " in edge " + cname);
-      }
-    }
+    if (queryResult.result.ok()) {
+      VPackSlice schemaArray = queryResult.data->slice();
 
-    if (_from.size() > 0) {
-      if (_to.size() == 0) {
-        THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
-                                       " `_to` value is not supplied in edge " + cname);
-      }
-      if (_from == _to) {
-        THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
-                                       _from + " reference to same document " +
-                                           _to + " in edge " + cname);
+      if (schemaArray.length() == 1) {
+        for (auto it : VPackArrayIterator(schemaArray)) {
+          if (it.isObject()) {
+            VPackSlice schemaItem = it.value();
+            VPackSlice propertyvalue(schemaItem.get(
+                std::vector<std::string>({"rule", "properties"})));
+
+            for (auto prop : VPackObjectIterator(propertyvalue)) {
+              std::string fieldName = prop.key.copyString();
+              VPackSlice modelProp = prop.value;
+              VPackSlice linkCollections = modelProp.get("linkCollections");
+              if (linkCollections.isArray()) {
+                for (auto link : VPackArrayIterator(linkCollections)) {
+                  if (link.isString()) {
+                    std::string collectionName = link.copyString();
+
+                    if (collectionName == cname) {
+                      std::string link_id = collectionName + "/" + _key;
+
+                      std::string q = "FOR r IN @@coll FILTER r." + fieldName +
+                                      "._id =='" + link_id + "' || '" +
+                                      link_id + "' IN r." + fieldName +
+                                      "[*]._id LIMIT 1 RETURN r";
+
+                      auto binds = std::make_shared<VPackBuilder>();
+                      binds->openObject();
+                      binds->add("@coll", VPackValue(collName));
+                      binds->close();
+                      arangodb::aql::Query query(_transactionContext,
+                                                 aql::QueryString(q), binds);
+                      aql::QueryResult queryResult = query.executeSync();
+
+                      Result res = queryResult.result;
+                      if (queryResult.result.ok()) {
+                        VPackSlice array = queryResult.data->slice();
+                        if (array.length() > 0) {
+                          THROW_ARANGO_EXCEPTION_MESSAGE(
+                              TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                              "cannot remove document " + _key +
+                                  " because it is referenced in " + collName +
+                                  ", under the property " + fieldName);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   };
-
-  if (newValue.isObject()) {
-    checkValue(newValue);
-  }
-
-  if (newValue.isArray()) {
-    for (auto it : VPackArrayIterator(newValue)) {
-      if (it.isObject()) {
-        checkValue(it.value());
-      }
-    }
-  }
-
-  // END ADDITIONS
-
-```
-
-REMOVEASYNC
-
-Added the following:
-
-```
-/*
+  /*
     Validate whether any of the documents have been referenced in other edges
   */
   auto validateReference = [&](std::string collName, std::string _key) {
     std::string _id = cname + "/" + _key;
     std::string q = "FOR r IN @@coll FILTER r._from=='" + _id +
-                    "' || r._to=='" + _id + "'  LIMIT 1 RETURN r";
+                    "' || r._to=='" + _id + "' LIMIT 1 RETURN r";
+
     auto binds = std::make_shared<VPackBuilder>();
     binds->openObject();
     binds->add("@coll", VPackValue(collName));
@@ -257,11 +451,6 @@ Added the following:
     Result res = queryResult.result;
     if (queryResult.result.ok()) {
       VPackSlice array = queryResult.data->slice();
-      std::cout << std::endl;
-      std::cout << q << std::endl;
-      std::cout << "RESULTS LENGTH " << array.length() << std::endl;
-      std::cout << std::endl;
-
       if (array.length() > 0) {
         THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
                                        "cannot remove document " + _key +
@@ -273,14 +462,17 @@ Added the following:
   if (value.isObject() || value.isString()) {
     arangodb::velocypack::StringRef key(transaction::helpers::extractKeyPart(value));
     std::string _key = key.toString();
+    // std::string _id = doc_id.toString();
+
     for (auto collection : vocbase().collections(false)) {
       int collType = collection->type();
       std::string collName = collection->name();
-
-      std::cout << "COLL TYPE: " << collType << " COLL NAME: " << collName << std::endl;
-
       if (collType == 3) {
         validateReference(collName, _key);
+      } else {
+        if (collName != cname) {
+          getSchemaReferences(collName, _key);
+        }
       }
     }
   }
@@ -288,16 +480,138 @@ Added the following:
   if (value.isArray()) {
     for (VPackSlice docValue : VPackArrayIterator(value)) {
       arangodb::velocypack::StringRef key(transaction::helpers::extractKeyPart(docValue));
+
       std::string _key = key.toString();
+
       for (auto collection : vocbase().collections(false)) {
+        int collType = collection->type();
         std::string collName = collection->name();
-        if (collection->type() == 3) {
-          validateReference(collection->name(), _key);
+        if (collType == 3) {
+          validateReference(collName, _key);
+        } else {
+          if (collName != cname) {
+            getSchemaReferences(collName, _key);
+          }
         }
       }
     }
   }
+}
 
-  // END OF ADDITIONS
+void transaction::Methods::beforeTruncate(std::string const& cname,
+                                          OperationOptions const& options) {
+  auto getSchemaReferences = [&](std::string collName) {
+    // QUERY the schema definition on this collection
+    std::string qry =
+        "LET colschema = SCHEMA_GET('" + collName + "') RETURN colschema";
+    auto binds = std::make_shared<VPackBuilder>();
+    binds->openObject();
+    binds->close();
+
+    arangodb::aql::Query query(_transactionContext, aql::QueryString(qry), binds);
+    aql::QueryResult queryResult = query.executeSync();
+
+    if (queryResult.result.fail()) {
+      THROW_ARANGO_EXCEPTION(queryResult.result);
+    }
+
+    if (queryResult.result.ok()) {
+      VPackSlice schemaArray = queryResult.data->slice();
+
+      if (schemaArray.length() == 1) {
+        for (auto it : VPackArrayIterator(schemaArray)) {
+          if (it.isObject()) {
+            VPackSlice schemaItem = it.value();
+            VPackSlice propertyvalue(schemaItem.get(
+                std::vector<std::string>({"rule", "properties"})));
+
+            for (auto prop : VPackObjectIterator(propertyvalue)) {
+              std::string fieldName = prop.key.copyString();
+              VPackSlice modelProp = prop.value;
+              VPackSlice linkCollections = modelProp.get("linkCollections");
+              if (linkCollections.isArray()) {
+                for (auto link : VPackArrayIterator(linkCollections)) {
+                  if (link.isString()) {
+                    std::string collectionName = link.copyString();
+
+                    if (cname == collectionName) {
+                      std::string link_id = collectionName + "/";
+
+                      std::string q =
+                          "FOR r IN @@coll FILTER r." + fieldName +
+                          "._id LIKE '" + link_id + "%' || CONCAT(r." + fieldName +
+                          "[*]._id) LIKE '" + link_id + "%' LIMIT 1 RETURN r";
+
+                      auto binds = std::make_shared<VPackBuilder>();
+                      binds->openObject();
+                      binds->add("@coll", VPackValue(collName));
+                      binds->close();
+                      arangodb::aql::Query query(_transactionContext,
+                                                 aql::QueryString(q), binds);
+                      aql::QueryResult queryResult = query.executeSync();
+
+                      Result res = queryResult.result;
+
+                      if (queryResult.result.ok()) {
+                        VPackSlice array = queryResult.data->slice();
+                        if (array.length() > 0) {
+                          THROW_ARANGO_EXCEPTION_MESSAGE(
+                              TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                              "cannot truncate collection " + collectionName +
+                                  " because documents have references in " +
+                                  collName + ", under field name " + fieldName);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  /*
+   Validate whether any of the documents have been referenced in other edges
+ */
+
+  auto validateReference = [&](std::string collName) {
+    std::string q = "FOR r IN @@coll FILTER r._from LIKE '" + cname +
+                    "/%' || r._to LIKE '" + cname + "/%' LIMIT 1 RETURN r";
+
+    auto binds = std::make_shared<VPackBuilder>();
+    binds->openObject();
+    binds->add("@coll", VPackValue(collName));
+    binds->close();
+    arangodb::aql::Query query(_transactionContext, aql::QueryString(q), binds);
+    aql::QueryResult queryResult = query.executeSync();
+
+    Result res = queryResult.result;
+    if (queryResult.result.ok()) {
+      VPackSlice array = queryResult.data->slice();
+
+      if (array.length() > 0) {
+        THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_ARANGO_DOCUMENT_TYPE_INVALID,
+                                       "cannot truncate collection because "
+                                       "documents have references in " +
+                                           collName);
+      }
+    }
+  };
+
+  for (auto collection : vocbase().collections(false)) {
+    int collType = collection->type();
+    std::string collName = collection->name();
+
+    if (collName != cname) {
+      getSchemaReferences(collName);
+    }
+    if (collType == 3) {
+      validateReference(collName);
+    }
+  }
+}
 
 ```
