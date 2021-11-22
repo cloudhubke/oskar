@@ -594,8 +594,7 @@ function buildCommunityPackage
   and releaseMode
   and community
   and set -xg NOSTRIP 1
-  # and buildStaticArangoDB # This is not needed, as we use the ubuntu image
-  and buildArangoDB 
+  and buildStaticArangoDB
   and downloadStarter
   and buildPackage
 
