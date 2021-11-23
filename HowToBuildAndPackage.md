@@ -83,3 +83,7 @@ findArangoDBVersion
 
 buildCommunityPackage
 ```
+
+If building on linux throws an error, consider restarting the terminal, remove the folders work/debian, work/targz, work/arangodb3-3.0...
+
+restart the build.
